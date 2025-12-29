@@ -1,8 +1,7 @@
-# prediksi_belanja_pasien_pyspark.py
+# rs.py - PySpark tanpa Java di Streamlit Cloud
 import streamlit as st
 import numpy as np
 from sklearn.model_selection import train_test_split
-from sklearn.linear_model import LinearRegression
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.preprocessing import LabelEncoder
@@ -13,21 +12,49 @@ import plotly.graph_objects as go
 from datetime import datetime
 import hashlib
 
-# Import PySpark
-from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, when, to_date, sum as spark_sum, countDistinct, avg, min as spark_min, max as spark_max, count, concat_ws, first, expr, date_format, month, dayofweek, dayofmonth, year, weekofyear, lit
-from pyspark.sql.types import DoubleType, IntegerType, StringType, DateType, TimestampType
-from pyspark.sql import Window
-from pyspark.ml.feature import StringIndexer
-import pyspark.sql.functions as F
-import pandas as pd
-
-# Inisialisasi Spark Session
-spark = SparkSession.builder \
-    .appName("AnalisisBiayaPasien2025") \
-    .config("spark.sql.execution.arrow.pyspark.enabled", "true") \
-    .config("spark.sql.execution.arrow.pyspark.fallback.enabled", "true") \
-    .getOrCreate()
+# Import PySpark dengan error handling
+try:
+    from pyspark.sql import SparkSession
+    from pyspark.sql.functions import col, when, to_date, sum as spark_sum, countDistinct, avg, min as spark_min, max as spark_max, count, concat_ws, first, expr, date_format, month, dayofweek, dayofmonth, year, weekofyear, lit
+    from pyspark.sql.types import DoubleType, IntegerType, StringType, DateType, TimestampType
+    from pyspark.sql import Window
+    import pyspark.sql.functions as F
+    
+    # Inisialisasi Spark Session TANPA Java (mode lokal)
+    spark = SparkSession.builder \
+        .appName("AnalisisBiayaPasien2025") \
+        .master("local") \
+        .config("spark.driver.memory", "2g") \
+        .config("spark.executor.memory", "2g") \
+        .config("spark.sql.execution.arrow.pyspark.enabled", "true") \
+        .config("spark.sql.execution.arrow.pyspark.fallback.enabled", "true") \
+        .config("spark.driver.host", "localhost") \
+        .config("spark.ui.enabled", "false") \
+        .getOrCreate()
+    
+    PYSPARK_AVAILABLE = True
+    st.success("✅ PySpark berhasil diinisialisasi")
+    
+except Exception as e:
+    PYSPARK_AVAILABLE = False
+    st.warning(f"⚠️ PySpark tidak dapat diinisialisasi: {str(e)}")
+    st.info("Menggunakan fallback ke Pandas untuk processing")
+    
+    # Import pandas sebagai fallback
+    import pandas as pd
+    
+    # Buat fungsi-fungsi dummy untuk kompatibilitas
+    class SparkDummy:
+        def read(self):
+            return self
+        def option(self, *args, **kwargs):
+            return self
+        def csv(self, *args, **kwargs):
+            return self
+        def toPandas(self):
+            return pd.DataFrame()
+    
+    spark = SparkDummy()
 
 # Konfigurasi halaman
 st.set_page_config(
@@ -69,6 +96,7 @@ st.markdown("""
 <div class="main-header">
     <h1>🏥 Analisis Biaya Pelayanan Pasien 2025</h1>
     <p>Analisis data transaksi pelayanan pasien Jan-Nov 2025</p>
+    <p style="font-size: 14px; color: #666;">Powered by PySpark</p>
 </div>
 """, unsafe_allow_html=True)
 
@@ -76,7 +104,7 @@ st.markdown("""
 @st.cache_data
 def load_data_from_github():
     """
-    Load data dari URL GitHub menggunakan PySpark
+    Load data dari URL GitHub dengan PySpark jika tersedia
     """
     # URL untuk dataset pertama (default)
     github_raw_url_1 = 'https://raw.githubusercontent.com/wawanab705-design/belanja/refs/heads/main/belanja-jan-nov2025.csv'
@@ -85,69 +113,108 @@ def load_data_from_github():
     github_raw_url_2 = 'https://raw.githubusercontent.com/wawanab705-design/belanja/refs/heads/main/belanja-pasien-asuransi2025.csv'
     
     try:
-        # Load dataset pertama menggunakan PySpark
-        df1 = spark.read \
-            .option("header", "false") \
-            .option("inferSchema", "false") \
-            .csv(github_raw_url_1)
+        if PYSPARK_AVAILABLE:
+            # Load dengan PySpark
+            with st.spinner("Memuat data dengan PySpark..."):
+                # Load dataset pertama
+                df1 = spark.read \
+                    .option("header", "false") \
+                    .option("inferSchema", "false") \
+                    .csv(github_raw_url_1)
+                
+                # Beri nama kolom untuk dataset pertama
+                if df1.count() > 0:
+                    column_names = [
+                        'id_transaksi', 'id_pasien', 'no_urut', 'nama_pasien', 'waktu',
+                        'dokter', 'jenis_layanan', 'poli', 'sumber_pembayaran', 'biaya',
+                        'diskon', 'flag'
+                    ]
+                    
+                    if len(df1.columns) == len(column_names):
+                        for i, col_name in enumerate(column_names):
+                            df1 = df1.withColumnRenamed(f"_c{i}", col_name)
+                
+                # Load dataset kedua
+                df2 = spark.read \
+                    .option("header", "true") \
+                    .option("delimiter", ";") \
+                    .option("inferSchema", "false") \
+                    .csv(github_raw_url_2)
+                
+                # Rename kolom untuk dataset kedua
+                column_mapping = {
+                    'NO': 'id_transaksi',
+                    'RM': 'id_pasien',
+                    'EPS': 'no_urut',
+                    'NAMA': 'nama_pasien',
+                    'ADMISI': 'waktu',
+                    'DOKTER': 'dokter',
+                    'JENIS PELAYANAN': 'poli',
+                    'RAWAT': 'jenis_layanan',
+                    'PENJAMIN': 'jenis_jaminan',
+                    'TOTAL': 'biaya',
+                    'DISKON': 'diskon',
+                    'MENINGGAL': 'flag'
+                }
+                
+                for old_name, new_name in column_mapping.items():
+                    if old_name in df2.columns:
+                        df2 = df2.withColumnRenamed(old_name, new_name)
+                
+                df2 = df2.withColumn('sumber_pembayaran', col('jenis_jaminan'))
+                
+                # Gabungkan
+                df_combined = df1.unionByName(df2, allowMissingColumns=True)
+                df_combined_pd = df_combined.toPandas() if df_combined.count() > 0 else pd.DataFrame()
+                df2_pd = df2.toPandas() if df2.count() > 0 else pd.DataFrame()
+                
+                return df_combined_pd, df2_pd, "✅ Data berhasil dimuat dengan PySpark!"
         
-        # Beri nama kolom untuk dataset pertama
-        if df1.count() > 0 and df1.columns[0] != 'id_transaksi':
-            column_names = [
-                'id_transaksi', 'id_pasien', 'no_urut', 'nama_pasien', 'waktu',
-                'dokter', 'jenis_layanan', 'poli', 'sumber_pembayaran', 'biaya',
-                'diskon', 'flag'
-            ]
+        # Fallback ke Pandas jika PySpark tidak tersedia
+        with st.spinner("Memuat data dengan Pandas..."):
+            import pandas as pd
             
-            # Pastikan jumlah kolom sesuai
-            if len(df1.columns) == len(column_names):
-                for i, col_name in enumerate(column_names):
-                    df1 = df1.withColumnRenamed(f"_c{i}", col_name)
-            else:
-                return None, None, f"❌ Dataset 1: Jumlah kolom tidak sesuai. Ditemukan {len(df1.columns)} kolom."
-        
-        # Load dataset kedua menggunakan PySpark
-        df2 = spark.read \
-            .option("header", "true") \
-            .option("delimiter", ";") \
-            .option("inferSchema", "false") \
-            .csv(github_raw_url_2)
-        
-        # Proses dataset kedua - mapping kolom ke format yang sama
-        column_mapping = {
-            'NO': 'id_transaksi',
-            'RM': 'id_pasien',
-            'EPS': 'no_urut',
-            'NAMA': 'nama_pasien',
-            'ADMISI': 'waktu',
-            'DOKTER': 'dokter',
-            'JENIS PELAYANAN': 'poli',
-            'RAWAT': 'jenis_layanan',
-            'PENJAMIN': 'jenis_jaminan',
-            'TOTAL': 'biaya',
-            'DISKON': 'diskon',
-            'MENINGGAL': 'flag'
-        }
-        
-        # Rename kolom untuk dataset kedua
-        for old_name, new_name in column_mapping.items():
-            if old_name in df2.columns:
-                df2 = df2.withColumnRenamed(old_name, new_name)
-        
-        # Tambahkan kolom sumber_pembayaran yang kosong untuk dataset kedua
-        df2 = df2.withColumn('sumber_pembayaran', col('jenis_jaminan'))
-        
-        # Gabungkan kedua dataset
-        df_combined = df1.unionByName(df2, allowMissingColumns=True)
-        
-        # Konversi ke pandas untuk kompatibilitas dengan fungsi lainnya
-        df_combined_pd = df_combined.toPandas() if df_combined.count() > 0 else pd.DataFrame()
-        df2_pd = df2.toPandas() if df2.count() > 0 else pd.DataFrame()
-        
-        return df_combined_pd, df2_pd, "✅ Data berhasil dimuat (2 dataset digabungkan)!"
-        
+            # Load dataset pertama
+            df1 = pd.read_csv(github_raw_url_1, sep=',', header=None, low_memory=False, encoding='utf-8')
+            
+            # Load dataset kedua
+            df2 = pd.read_csv(github_raw_url_2, sep=';', encoding='utf-8')
+            
+            # Proses dataset pertama
+            if df1.shape[1] == 12:
+                df1.columns = [
+                    'id_transaksi', 'id_pasien', 'no_urut', 'nama_pasien', 'waktu',
+                    'dokter', 'jenis_layanan', 'poli', 'sumber_pembayaran', 'biaya',
+                    'diskon', 'flag'
+                ]
+            
+            # Proses dataset kedua
+            column_mapping = {
+                'NO': 'id_transaksi',
+                'RM': 'id_pasien',
+                'EPS': 'no_urut',
+                'NAMA': 'nama_pasien',
+                'ADMISI': 'waktu',
+                'DOKTER': 'dokter',
+                'JENIS PELAYANAN': 'poli',
+                'RAWAT': 'jenis_layanan',
+                'PENJAMIN': 'jenis_jaminan',
+                'TOTAL': 'biaya',
+                'DISKON': 'diskon',
+                'MENINGGAL': 'flag'
+            }
+            
+            df2 = df2.rename(columns=column_mapping)
+            df2['sumber_pembayaran'] = df2['jenis_jaminan']
+            
+            # Gabungkan
+            df_combined = pd.concat([df1, df2], ignore_index=True)
+            
+            return df_combined, df2, "✅ Data berhasil dimuat dengan Pandas (fallback)"
+            
     except Exception as e:
         return None, None, f"❌ Error membaca file: {str(e)}"
+
 
 # Fungsi preprocessing
 def preprocess_data(df):
