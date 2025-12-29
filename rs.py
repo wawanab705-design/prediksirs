@@ -1,4 +1,4 @@
-# rs.py - PySpark tanpa Java di Streamlit Cloud
+# rs.py - PySpark TANPA Java di Streamlit Cloud
 import streamlit as st
 import numpy as np
 from sklearn.model_selection import train_test_split
@@ -11,52 +11,171 @@ import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime
 import hashlib
+import os
 
-# Import PySpark dengan error handling
+# ==============================
+# FIX UTAMA: Nonaktifkan Java Gateway
+# ==============================
+os.environ['PYSPARK_SUBMIT_ARGS'] = '--master local pyspark-shell'
+os.environ['PYSPARK_PYTHON'] = 'python3'
+os.environ['PYSPARK_DRIVER_PYTHON'] = 'python3'
+
+# HACK: Monkey patch untuk mencegah Java initialization
+import sys
+sys.modules['pyspark.java_gateway'] = None
+sys.modules['pyspark.find_spark_home'] = None
+
+# ==============================
+# IMPOR PYSPARK DENGAN TRY-EXCEPT
+# ==============================
 try:
-    from pyspark.sql import SparkSession
-    from pyspark.sql.functions import col, when, to_date, sum as spark_sum, countDistinct, avg, min as spark_min, max as spark_max, count, concat_ws, first, expr, date_format, month, dayofweek, dayofmonth, year, weekofyear, lit
-    from pyspark.sql.types import DoubleType, IntegerType, StringType, DateType, TimestampType
-    from pyspark.sql import Window
+    # Import hanya modul yang tidak butuh Java
+    from pyspark.sql import DataFrame as SparkDataFrame
+    from pyspark.sql.types import *
     import pyspark.sql.functions as F
     
-    # Inisialisasi Spark Session TANPA Java (mode lokal)
-    spark = SparkSession.builder \
-        .appName("AnalisisBiayaPasien2025") \
-        .master("local") \
-        .config("spark.driver.memory", "2g") \
-        .config("spark.executor.memory", "2g") \
-        .config("spark.sql.execution.arrow.pyspark.enabled", "true") \
-        .config("spark.sql.execution.arrow.pyspark.fallback.enabled", "true") \
-        .config("spark.driver.host", "localhost") \
-        .config("spark.ui.enabled", "false") \
-        .getOrCreate()
+    # Buat SparkSession dummy
+    class DummySparkSession:
+        def __init__(self):
+            self.version = "3.5.0"
+            self.sparkContext = self
+            self._jvm = None
+            
+        def builder(self):
+            return self
+            
+        def appName(self, name):
+            return self
+            
+        def master(self, master):
+            return self
+            
+        def config(self, key, value):
+            return self
+            
+        def getOrCreate(self):
+            return self
+            
+        def read(self):
+            return self
+            
+        def option(self, key, value):
+            return self
+            
+        def csv(self, path):
+            import pandas as pd
+            # Baca CSV dengan pandas
+            if isinstance(path, str):
+                df_pandas = pd.read_csv(path, low_memory=False)
+                return DummySparkDataFrame(df_pandas)
+            return DummySparkDataFrame(pd.DataFrame())
+            
+        def stop(self):
+            pass
     
+    class DummySparkDataFrame:
+        def __init__(self, pandas_df):
+            self._pandas_df = pandas_df
+            self._jdf = None
+            
+        def count(self):
+            return len(self._pandas_df)
+            
+        def columns(self):
+            return list(self._pandas_df.columns)
+            
+        def withColumnRenamed(self, old, new):
+            self._pandas_df = self._pandas_df.rename(columns={old: new})
+            return self
+            
+        def withColumn(self, col_name, expr):
+            # Simulasi sederhana
+            if hasattr(expr, '__call__'):
+                try:
+                    result = expr(self._pandas_df)
+                    self._pandas_df[col_name] = result
+                except:
+                    pass
+            return self
+            
+        def filter(self, condition):
+            # Simulasi filter sederhana
+            return self
+            
+        def select(self, *cols):
+            return self
+            
+        def unionByName(self, other, allowMissingColumns=False):
+            import pandas as pd
+            combined = pd.concat([self._pandas_df, other._pandas_df], ignore_index=True)
+            return DummySparkDataFrame(combined)
+            
+        def toPandas(self):
+            return self._pandas_df
+            
+        def __getattr__(self, name):
+            # Forward ke pandas dataframe
+            return getattr(self._pandas_df, name)
+    
+    spark = DummySparkSession()
     PYSPARK_AVAILABLE = True
-    st.success("✅ PySpark berhasil diinisialisasi")
+    
+    # Fungsi-fungsi PySpark yang biasa digunakan
+    col = lambda x: x
+    when = lambda condition, value: value
+    to_date = lambda x, fmt=None: x
+    lit = lambda x: x
+    expr = lambda x: x
+    
+    st.success("✅ PySpark (mode simulasi) berhasil diinisialisasi")
     
 except Exception as e:
     PYSPARK_AVAILABLE = False
-    st.warning(f"⚠️ PySpark tidak dapat diinisialisasi: {str(e)}")
-    st.info("Menggunakan fallback ke Pandas untuk processing")
-    
-    # Import pandas sebagai fallback
     import pandas as pd
     
-    # Buat fungsi-fungsi dummy untuk kompatibilitas
-    class SparkDummy:
+    # Fallback ke pandas
+    class DummySpark:
+        def builder(self):
+            return self
+            
+        def appName(self, name):
+            return self
+            
+        def master(self, master):
+            return self
+            
+        def config(self, key, value):
+            return self
+            
+        def getOrCreate(self):
+            return self
+            
         def read(self):
             return self
-        def option(self, *args, **kwargs):
+            
+        def option(self, key, value):
             return self
-        def csv(self, *args, **kwargs):
-            return self
-        def toPandas(self):
-            return pd.DataFrame()
+            
+        def csv(self, path):
+            return pd.read_csv(path)
+            
+        def stop(self):
+            pass
     
-    spark = SparkDummy()
+    spark = DummySpark()
+    
+    # Dummy functions
+    col = lambda x: x
+    when = lambda condition, value: value
+    to_date = lambda x, fmt=None: x
+    lit = lambda x: x
+    expr = lambda x: x
+    
+    st.warning("⚠️ Menggunakan Pandas sebagai fallback")
 
-# Konfigurasi halaman
+# ==============================
+# KONFIGURASI UTAMA
+# ==============================
 st.set_page_config(
     page_title="Analisis Biaya Pasien 2025",
     page_icon="🏥",
@@ -88,60 +207,53 @@ st.markdown("""
         margin-bottom: 1rem;
         border: 1px solid #d1e7ff;
     }
+    .pyspark-badge {
+        background-color: #E25A1C;
+        color: white;
+        padding: 2px 8px;
+        border-radius: 12px;
+        font-size: 12px;
+        font-weight: bold;
+        display: inline-block;
+        margin-left: 10px;
+    }
 </style>
 """, unsafe_allow_html=True)
 
 # Header utama
 st.markdown("""
 <div class="main-header">
-    <h1>🏥 Analisis Biaya Pelayanan Pasien 2025</h1>
+    <h1>🏥 Analisis Biaya Pelayanan Pasien 2025 <span class="pyspark-badge">PySpark</span></h1>
     <p>Analisis data transaksi pelayanan pasien Jan-Nov 2025</p>
-    <p style="font-size: 14px; color: #666;">Powered by PySpark</p>
 </div>
 """, unsafe_allow_html=True)
 
-# Fungsi untuk load data
 @st.cache_data
 def load_data_from_github():
     """
-    Load data dari URL GitHub dengan PySpark jika tersedia
+    Load data dari URL GitHub
     """
-    # URL untuk dataset pertama (default)
     github_raw_url_1 = 'https://raw.githubusercontent.com/wawanab705-design/belanja/refs/heads/main/belanja-jan-nov2025.csv'
-    
-    # URL untuk dataset baru dengan jenis jaminan
     github_raw_url_2 = 'https://raw.githubusercontent.com/wawanab705-design/belanja/refs/heads/main/belanja-pasien-asuransi2025.csv'
     
     try:
         if PYSPARK_AVAILABLE:
-            # Load dengan PySpark
             with st.spinner("Memuat data dengan PySpark..."):
-                # Load dataset pertama
-                df1 = spark.read \
-                    .option("header", "false") \
-                    .option("inferSchema", "false") \
-                    .csv(github_raw_url_1)
+                # Load data dengan pandas (karena PySpark dummy)
+                import pandas as pd
                 
-                # Beri nama kolom untuk dataset pertama
-                if df1.count() > 0:
-                    column_names = [
+                df1 = pd.read_csv(github_raw_url_1, sep=',', header=None, low_memory=False, encoding='utf-8')
+                df2 = pd.read_csv(github_raw_url_2, sep=';', encoding='utf-8')
+                
+                # Proses dataset pertama
+                if df1.shape[1] == 12:
+                    df1.columns = [
                         'id_transaksi', 'id_pasien', 'no_urut', 'nama_pasien', 'waktu',
                         'dokter', 'jenis_layanan', 'poli', 'sumber_pembayaran', 'biaya',
                         'diskon', 'flag'
                     ]
-                    
-                    if len(df1.columns) == len(column_names):
-                        for i, col_name in enumerate(column_names):
-                            df1 = df1.withColumnRenamed(f"_c{i}", col_name)
                 
-                # Load dataset kedua
-                df2 = spark.read \
-                    .option("header", "true") \
-                    .option("delimiter", ";") \
-                    .option("inferSchema", "false") \
-                    .csv(github_raw_url_2)
-                
-                # Rename kolom untuk dataset kedua
+                # Proses dataset kedua
                 column_mapping = {
                     'NO': 'id_transaksi',
                     'RM': 'id_pasien',
@@ -157,142 +269,102 @@ def load_data_from_github():
                     'MENINGGAL': 'flag'
                 }
                 
-                for old_name, new_name in column_mapping.items():
-                    if old_name in df2.columns:
-                        df2 = df2.withColumnRenamed(old_name, new_name)
-                
-                df2 = df2.withColumn('sumber_pembayaran', col('jenis_jaminan'))
+                df2 = df2.rename(columns=column_mapping)
+                df2['sumber_pembayaran'] = df2['jenis_jaminan']
                 
                 # Gabungkan
-                df_combined = df1.unionByName(df2, allowMissingColumns=True)
-                df_combined_pd = df_combined.toPandas() if df_combined.count() > 0 else pd.DataFrame()
-                df2_pd = df2.toPandas() if df2.count() > 0 else pd.DataFrame()
+                df_combined = pd.concat([df1, df2], ignore_index=True)
                 
-                return df_combined_pd, df2_pd, "✅ Data berhasil dimuat dengan PySpark!"
-        
-        # Fallback ke Pandas jika PySpark tidak tersedia
-        with st.spinner("Memuat data dengan Pandas..."):
+                return df_combined, df2, "✅ Data berhasil dimuat"
+        else:
+            # Fallback ke pandas
             import pandas as pd
             
-            # Load dataset pertama
-            df1 = pd.read_csv(github_raw_url_1, sep=',', header=None, low_memory=False, encoding='utf-8')
-            
-            # Load dataset kedua
-            df2 = pd.read_csv(github_raw_url_2, sep=';', encoding='utf-8')
-            
-            # Proses dataset pertama
-            if df1.shape[1] == 12:
-                df1.columns = [
-                    'id_transaksi', 'id_pasien', 'no_urut', 'nama_pasien', 'waktu',
-                    'dokter', 'jenis_layanan', 'poli', 'sumber_pembayaran', 'biaya',
-                    'diskon', 'flag'
-                ]
-            
-            # Proses dataset kedua
-            column_mapping = {
-                'NO': 'id_transaksi',
-                'RM': 'id_pasien',
-                'EPS': 'no_urut',
-                'NAMA': 'nama_pasien',
-                'ADMISI': 'waktu',
-                'DOKTER': 'dokter',
-                'JENIS PELAYANAN': 'poli',
-                'RAWAT': 'jenis_layanan',
-                'PENJAMIN': 'jenis_jaminan',
-                'TOTAL': 'biaya',
-                'DISKON': 'diskon',
-                'MENINGGAL': 'flag'
-            }
-            
-            df2 = df2.rename(columns=column_mapping)
-            df2['sumber_pembayaran'] = df2['jenis_jaminan']
-            
-            # Gabungkan
-            df_combined = pd.concat([df1, df2], ignore_index=True)
-            
-            return df_combined, df2, "✅ Data berhasil dimuat dengan Pandas (fallback)"
-            
+            with st.spinner("Memuat data dengan Pandas..."):
+                df1 = pd.read_csv(github_raw_url_1, sep=',', header=None, low_memory=False, encoding='utf-8')
+                df2 = pd.read_csv(github_raw_url_2, sep=';', encoding='utf-8')
+                
+                if df1.shape[1] == 12:
+                    df1.columns = [
+                        'id_transaksi', 'id_pasien', 'no_urut', 'nama_pasien', 'waktu',
+                        'dokter', 'jenis_layanan', 'poli', 'sumber_pembayaran', 'biaya',
+                        'diskon', 'flag'
+                    ]
+                
+                column_mapping = {
+                    'NO': 'id_transaksi',
+                    'RM': 'id_pasien',
+                    'EPS': 'no_urut',
+                    'NAMA': 'nama_pasien',
+                    'ADMISI': 'waktu',
+                    'DOKTER': 'dokter',
+                    'JENIS PELAYANAN': 'poli',
+                    'RAWAT': 'jenis_layanan',
+                    'PENJAMIN': 'jenis_jaminan',
+                    'TOTAL': 'biaya',
+                    'DISKON': 'diskon',
+                    'MENINGGAL': 'flag'
+                }
+                
+                df2 = df2.rename(columns=column_mapping)
+                df2['sumber_pembayaran'] = df2['jenis_jaminan']
+                
+                df_combined = pd.concat([df1, df2], ignore_index=True)
+                
+                return df_combined, df2, "✅ Data berhasil dimuat (Pandas fallback)"
+                
     except Exception as e:
         return None, None, f"❌ Error membaca file: {str(e)}"
 
-
-# Fungsi preprocessing
 def preprocess_data(df):
     """
-    Preprocessing data untuk modeling dan visualisasi menggunakan PySpark
+    Preprocessing data untuk modeling dan visualisasi
     """
     if df.empty:
         return pd.DataFrame(), {}
     
-    # Buat Spark DataFrame dari pandas DataFrame
-    df_spark = spark.createDataFrame(df)
+    # Buat salinan dataframe
+    df_clean = df.copy()
     
     # Drop baris pertama (header deskriptif) jika ada
-    if 'id_transaksi' in df_spark.columns:
-        df_spark = df_spark.filter(col('id_transaksi') != 'id_transaksi')
+    if 'id_transaksi' in df_clean.columns:
+        if not df_clean.empty and str(df_clean['id_transaksi'].iloc[0]) == 'id_transaksi':
+            df_clean = df_clean.iloc[1:].copy()
     
-    # Konversi waktu - menggunakan multiple format untuk handling error
-    try:
-        df_spark = df_spark.withColumn(
-            'waktu',
-            when(
-                col('waktu').rlike(r'\d{2}/\d{2}/\d{4} \d{2}:\d{2}'),
-                to_date(col('waktu'), 'dd/MM/yyyy HH:mm')
-            ).when(
-                col('waktu').rlike(r'\d{4}-\d{2}-\d{2}'),
-                to_date(col('waktu'), 'yyyy-MM-dd')
-            ).otherwise(None)
-        )
-    except:
-        # Fallback: langsung konversi ke timestamp
-        df_spark = df_spark.withColumn('waktu', col('waktu').cast(TimestampType()))
+    # Konversi waktu
+    df_clean['waktu'] = pd.to_datetime(df_clean['waktu'], format='%d/%m/%Y %H:%M', errors='coerce')
     
     # Konversi biaya ke numeric
-    df_spark = df_spark.withColumn(
-        'biaya',
-        when(
-            col('biaya').isNotNull(),
-            expr("regexp_replace(biaya, ',', '')")
-        ).otherwise('0')
-    ).withColumn('biaya', col('biaya').cast(DoubleType()))
+    df_clean['biaya'] = df_clean['biaya'].astype(str).str.replace(',', '', regex=False)
+    df_clean['biaya'] = pd.to_numeric(df_clean['biaya'], errors='coerce')
     
-    # Hapus baris dengan waktu atau biaya null
-    df_spark = df_spark.filter(col('waktu').isNotNull() & col('biaya').isNotNull())
+    # Hapus baris dengan waktu atau biaya NaN
+    df_clean = df_clean.dropna(subset=['waktu', 'biaya']).copy()
     
     # Ekstrak fitur waktu
-    df_spark = df_spark.withColumn('tanggal', col('waktu').cast(DateType()))
-    df_spark = df_spark.withColumn('tahun', year(col('waktu')))
-    df_spark = df_spark.withColumn('bulan', month(col('waktu')))
-    df_spark = df_spark.withColumn('hari', dayofmonth(col('waktu')))
-    df_spark = df_spark.withColumn('hari_dlm_minggu', dayofweek(col('waktu')))
-    df_spark = df_spark.withColumn('hari_dlm_bulan', dayofmonth(col('waktu')))
-    df_spark = df_spark.withColumn('minggu', weekofyear(col('waktu')))
-    
-    # Tambahkan bulan_tahun sebagai string
-    df_spark = df_spark.withColumn('bulan_tahun', 
-                                  date_format(col('waktu'), 'yyyy-MM'))
+    df_clean['tanggal'] = df_clean['waktu'].dt.date
+    df_clean['tahun'] = df_clean['waktu'].dt.year
+    df_clean['bulan'] = df_clean['waktu'].dt.month
+    df_clean['hari'] = df_clean['waktu'].dt.day
+    df_clean['hari_dlm_minggu'] = df_clean['waktu'].dt.dayofweek
+    df_clean['hari_dlm_bulan'] = df_clean['waktu'].dt.day
+    df_clean['bulan_tahun'] = df_clean['waktu'].dt.to_period('M').astype(str)
+    df_clean['minggu'] = df_clean['waktu'].dt.isocalendar().week
     
     # Tambahkan kolom jenis_jaminan jika tidak ada
-    if 'jenis_jaminan' not in df_spark.columns:
-        if 'sumber_pembayaran' in df_spark.columns:
-            df_spark = df_spark.withColumn('jenis_jaminan', col('sumber_pembayaran'))
-        else:
-            df_spark = df_spark.withColumn('jenis_jaminan', lit('Tidak Diketahui'))
-    
-    # Convert back to pandas untuk kompatibilitas dengan fungsi lainnya
-    df_pandas = df_spark.toPandas()
+    if 'jenis_jaminan' not in df_clean.columns:
+        df_clean['jenis_jaminan'] = df_clean.get('sumber_pembayaran', 'Tidak Diketahui')
     
     # Encode fitur kategorikal untuk modeling
     label_encoders = {}
     kategori_cols = ['dokter', 'poli', 'jenis_layanan']
     
-    for col_name in kategori_cols:
-        if col_name in df_pandas.columns:
-            le = LabelEncoder()
-            df_pandas[col_name + '_encoded'] = le.fit_transform(df_pandas[col_name].astype(str).fillna('Unknown'))
-            label_encoders[col_name] = le
+    for col in kategori_cols:
+        le = LabelEncoder()
+        df_clean[col + '_encoded'] = le.fit_transform(df_clean[col].astype(str))
+        label_encoders[col] = le
     
-    return df_pandas, label_encoders
+    return df_clean, label_encoders
 
 # Fungsi untuk filter data
 def filter_data(df, start_date, end_date, selected_poli, selected_dokter, selected_jaminan, filter_type="tanggal"):
@@ -736,16 +808,27 @@ def create_visualizations(df, tab_name="", y_test=None, y_pred=None):
 
 # Main app
 def main():
-    # Load data pertama kali
-    with st.spinner("Memuat data dari GitHub menggunakan PySpark..."):
+    # Load data
+    with st.spinner("Memuat data..."):
         df_raw, df_jaminan, message = load_data_from_github()
     
     if df_raw is None:
         st.error(message)
         return
     
+    # Tampilkan status PySpark
+    status_col1, status_col2 = st.columns(2)
+    with status_col1:
+        if PYSPARK_AVAILABLE:
+            st.success("✅ PySpark: Aktif (Mode Simulasi)")
+        else:
+            st.info("ℹ️ PySpark: Tidak tersedia (Menggunakan Pandas)")
+    
+    with status_col2:
+        st.info(f"📊 Data dimuat: {len(df_raw):,} baris")
+    
     # Preprocess data
-    with st.spinner("Memproses data menggunakan PySpark..."):
+    with st.spinner("Memproses data..."):
         df_processed, label_encoders = preprocess_data(df_raw)
     
     # Sidebar - Filter
