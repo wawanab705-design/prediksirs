@@ -3,5 +3,5 @@ pandas
 numpy
 scikit-learn
 plotly
-pyspark
-pyarrow
+# pyspark
+# pyarrow
